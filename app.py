@@ -4,88 +4,94 @@ import pandas_ta as ta
 import pandas as pd
 import google.generativeai as genai
 
-# --- 1. AI 配置 (修正 NotFound 報錯) ---
+# --- 1. AI 配置 (使用最新穩定模型) ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # 確保使用目前最穩定的模型名稱
-    model = genai.GenerativeModel('gemini-1.5-flash') 
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 else:
-    st.error("❌ 未偵測到 API Key，請檢查 Streamlit Secrets 設定。")
+    st.error("❌ 找不到 API Key，請檢查 Secrets 設定。")
 
-st.set_page_config(page_title="短炒數據專家", layout="wide")
-st.title("⚡ 專業短炒數據儀表板")
+st.set_page_config(page_title="全方位短炒分析器", layout="wide")
+st.title("🛡️ 實戰級股票技術形態分析器")
 
-# --- 2. 側邊欄設定 ---
-ticker = st.sidebar.text_input("輸入代碼 (如: NVDA, 0700.HK)", "TSLA")
+# --- 2. 週期選擇 (明確標示數據限制) ---
+ticker = st.sidebar.text_input("輸入代碼 (例如: NVDA 或 0700.HK)", "TSLA")
 
-# 優化短線抓取參數，確保 5d/5m 能成功抓取
 time_options = {
-    "1. 極短線 (5分鐘線 - 近5日)": {"p": "5d", "i": "5m"},
-    "2. 小時線 (1小時圖 - 近1週)": {"p": "7d", "i": "60m"},
-    "3. 短波段 (日線 - 近5日)": {"p": "5d", "i": "1d"},
+    "1. 短線爆發 (5分鐘線 - 近5日)": {"p": "5d", "i": "5m"},
+    "2. 即日走勢 (15分鐘線 - 近1週)": {"p": "7d", "i": "15m"},
+    "3. 波段操作 (1小時線 - 近1個月)": {"p": "1mo", "i": "60m"},
+    "4. 中線趨勢 (日線 - 近半年)": {"p": "6mo", "i": "1d"},
 }
-selected_range = st.sidebar.selectbox("分析週期", list(time_options.keys()))
-p = time_options[selected_range]["p"]
-i = time_options[selected_range]["i"]
+selected_label = st.sidebar.selectbox("切換時間週期", list(time_options.keys()))
+p = time_options[selected_label]["p"]
+i = time_options[selected_label]["i"]
 
+# --- 3. 穩定數據抓取函數 ---
 @st.cache_data(ttl=60)
-def get_clean_data(symbol, period, interval):
+def fetch_data(symbol, period, interval):
     try:
-        # 抓取數據並自動處理多層索引
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        if df.empty:
-            return pd.DataFrame()
+        if df.empty: return None
         
-        # 修正 yfinance 新版索引問題
+        # 修正 yfinance 的 MultiIndex 問題，確保指標能正常計算
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
         df = df.ffill().dropna()
         return df
     except Exception:
-        return pd.DataFrame()
+        return None
 
-data = get_clean_data(ticker, p, i)
+data = fetch_data(ticker, p, i)
 
-# --- 3. 數據運算 ---
-if not data.empty and len(data) > 10:
-    # 計算 RSI
+# --- 4. 數據顯示與技術運算 ---
+if data is not None and len(data) > 20:
+    # 計算 RSI, MACD, 布林帶
     data['RSI'] = ta.rsi(data['Close'], length=14)
-    # 計算 MACD
-    macd = ta.macd(data['Close'])
-    data = pd.concat([data, macd], axis=1)
+    macd_df = ta.macd(data['Close'])
+    bbands = ta.bbands(data['Close'], length=20, std=2)
+    data = pd.concat([data, macd_df, bbands], axis=1)
     
-    # 阻力支持
-    res = float(data['High'].tail(15).max())
-    sup = float(data['Low'].tail(15).min())
-    
-    last_price = float(data['Close'].iloc[-1])
-    last_rsi = float(data['RSI'].dropna().iloc[-1])
-    # 尋找 MACD 柱狀圖欄位名
+    # 取得最新數值
+    curr_price = float(data['Close'].iloc[-1])
+    curr_rsi = float(data['RSI'].dropna().iloc[-1])
+    # 抓取 MACD 柱狀圖數值 (排除空值)
     h_col = [c for c in data.columns if 'MACDh' in c][0]
-    last_h = float(data[h_col].iloc[-1])
+    curr_h = float(data[h_col].dropna().iloc[-1])
+    
+    # 動態顯示時間戳
+    last_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
+    st.info(f"📅 **數據更新時間 ({selected_label})**: {last_time}")
 
-    # --- 4. 顯示數字指標 ---
-    st.subheader(f"📊 {ticker} 關鍵數據")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("現價", f"${last_price:.2f}")
-    c2.metric("RSI (14)", f"{last_rsi:.1f}")
-    c3.metric("MACD 柱", f"{last_h:.3f}")
+    # --- 數據儀表板 ---
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("當前價格", f"${curr_price:.2f}")
+    col2.metric("RSI 指標", f"{curr_rsi:.1f}")
+    col3.metric("MACD 能量", f"{curr_h:.3f}")
+    col4.metric("成交量", f"{int(data['Volume'].iloc[-1]):,}")
 
     st.markdown("---")
-    sc1, sc2 = st.columns(2)
-    sc1.error(f"🔴 短期壓力: ${res:.2f}")
-    sc2.success(f"🟢 短期支撐: ${sup:.2f}")
-
-    # --- 5. AI 分析按鈕 (修正 NotFound) ---
-    if st.button("🤖 獲取 AI 短炒策略"):
+    
+    # --- 5. AI 形態分析 ---
+    if st.button("🔍 執行 AI 深度圖表形態掃描"):
         try:
-            with st.spinner('AI 分析中...'):
-                prompt = (f"分析股票 {ticker}：現價 {last_price:.2f}, RSI {last_rsi:.1f}, "
-                          f"壓力 {res:.2f}, 支撐 {sup:.2f}。請簡短給出背馳判斷與操作建議。")
+            with st.spinner('AI 正在識別 K 線形態與背馳...'):
+                # 將最近 15 根 K 線的簡要數據傳給 AI，讓它自己找形態
+                recent_data = data[['Open', 'High', 'Low', 'Close']].tail(15).to_string()
+                prompt = (
+                    f"你是資深技術分析師。分析股票 {ticker} 在 {selected_label} 的表現：\n"
+                    f"最新數據：價格 {curr_price}, RSI {curr_rsi}, MACD柱 {curr_h}。\n"
+                    f"最近15根K線數據：\n{recent_data}\n\n"
+                    f"請繁體中文回答：\n"
+                    f"1. 識別具體形態 (如: 雙底、黃昏之星、收斂三角形等)\n"
+                    f"2. 是否有 RSI 或 MACD 背馳？\n"
+                    f"3. 具體支撐位與壓力位\n"
+                    f"4. 建議操作策略與止損價格。"
+                )
                 response = model.generate_content(prompt)
                 st.warning(response.text)
         except Exception as e:
-            st.error(f"AI 服務暫時不可用，請檢查 API Key。錯誤訊息: {str(e)}")
+            st.error("AI 分析目前遇到問題，請稍後再試。")
 else:
-    st.info("🕒 目前無法獲取該週期的數據。提示：5分鐘線僅限最近 60 天內數據。")
+    st.error(f"❌ 無法獲取 {ticker} 的數據。請確認代碼 (如 NVDA 或 0700.HK) 是否正確，或該時間週期暫無數據。")
