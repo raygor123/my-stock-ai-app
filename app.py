@@ -11,7 +11,7 @@ def init_gemini():
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         # 嘗試使用最穩定的模型
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         return model, None
     except Exception as e:
         return None, f"❌ AI 初始化失敗: {str(e)}"
